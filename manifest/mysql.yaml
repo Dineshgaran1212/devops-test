@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: booli-targets
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          values: rootpassword
+        - name: MYSQL_DATABASE
+          values: "targets"
+        - name: MYSQL_USER
+          value: "targets"
+        - name: MYSQL_PASSWORD
+          value: "passwords"
+        image: mysql
+        command: ['--default-authentication-plugin=mysql_native_password']
+        imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 10m
+            memory: 4Mi
+          limits:
+            cpu: 10m
+            memory: 4Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: booli-targets
+spec:
+  ports:
+  - port: 3306
+    name: mysql
+    targetPort: 3306
+  selector:
+    app: mysql
+  type: ClusterIP

@@ -1,0 +1,97 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "target-app.mysql.fullname" . }}
+  labels:
+    {{- include "target-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  serviceName: {{ include "target-app.mysql.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "target-app.mysql.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "target-app.mysql.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: mysql
+        image: "{{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}"
+        imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+        args:
+          - "--default-authentication-plugin=mysql_native_password"
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "target-app.fullname" . }}-mysql-secret
+              key: mysql-root-password
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "target-app.fullname" . }}-mysql-secret
+              key: mysql-database
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "target-app.fullname" . }}-mysql-secret
+              key: mysql-user
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "target-app.fullname" . }}-mysql-secret
+              key: mysql-password
+        ports:
+        - name: mysql
+          containerPort: 3306
+          protocol: TCP
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.mysql.resources | nindent 10 }}
+        volumeMounts:
+        {{- if .Values.mysql.persistence.enabled }}
+        - name: data
+          mountPath: /var/lib/mysql
+        {{- end }}
+        {{- if .Values.mysql.initdbScripts.enabled }}
+        - name: initdb
+          mountPath: /docker-entrypoint-initdb.d
+        {{- end }}
+      volumes:
+      {{- if .Values.mysql.persistence.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "target-app.mysql.fullname" . }}-pvc
+      {{- end }}
+      {{- if .Values.mysql.initdbScripts.enabled }}
+      - name: initdb
+        configMap:
+          name: {{ include "target-app.fullname" . }}-mysql-initdb
+      {{- end }}
+{{- end }}

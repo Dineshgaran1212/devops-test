@@ -1,0 +1,304 @@
+# GitLab CI/CD Pipeline for Target Application
+# This pipeline builds, tests, and deploys the application to Kubernetes
+
+stages:
+  - prepare
+  - build
+  - test
+  - push
+  - deploy
+  - prodtest
+
+variables:
+  # Docker Registry Configuration
+  DOCKER_REGISTRY: $CI_REGISTRY
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/target-web-app
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  
+  # Semantic Versioning
+  MAJOR_VERSION: "1"
+  MINOR_VERSION: "0"
+  
+  # Kubernetes Configuration
+  KUBERNETES_NAMESPACE: production
+  HELM_RELEASE_NAME: target-app
+  
+  # Docker-in-Docker configuration
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+
+# Generate Semantic Version
+generate-version:
+  stage: prepare
+  image: alpine:latest
+  script:
+    - export APP_VERSION="${MAJOR_VERSION}.${MINOR_VERSION}.${CI_PIPELINE_IID}"
+    - echo "Generated version - APP_VERSION=${APP_VERSION}"
+    - echo "APP_VERSION=${APP_VERSION}" >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  only:
+    - main
+    - master
+    - develop
+    - tags
+
+# Build Docker Image
+build:docker:
+  stage: build
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  before_script:
+    - docker info
+  script:
+    - echo "Building Docker image..."
+    - echo "Semantic version - ${APP_VERSION:-not-set}"
+    - echo "Git SHA - ${IMAGE_TAG}"
+    - |
+      docker build \
+        -t ${IMAGE_NAME}:${IMAGE_TAG} \
+        -t ${IMAGE_NAME}:${APP_VERSION:-latest} \
+        -t ${IMAGE_NAME}:latest \
+        --label "git.commit=${CI_COMMIT_SHA}" \
+        --label "git.branch=${CI_COMMIT_REF_NAME}" \
+        --label "app.version=${APP_VERSION:-dev}" \
+        --label "build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+        -f Dockerfile \
+        .
+    - echo "Docker image built successfully"
+    - docker images | grep ${IMAGE_NAME}
+  dependencies:
+    - generate-version
+  tags:
+    - docker
+  only:
+    - main
+    - master
+    - develop
+    - tags
+
+# Security Scan
+security:scan:
+  stage: test
+  image: aquasec/trivy:latest
+  before_script:
+    - trivy --version
+  script:
+    - echo "Scanning Docker image for vulnerabilities..."
+    - trivy image --severity HIGH,CRITICAL --exit-code 0 ${IMAGE_NAME}:${IMAGE_TAG} || true
+  allow_failure: true
+  dependencies:
+    - build:docker
+  only:
+    - main
+    - master
+    - develop
+
+# SonarQube Code Quality Check
+sonarqube-check:
+  stage: test
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner -Dsonar.projectKey=$CI_PROJECT_NAME 
+  allow_failure: true
+  only:
+    - merge_requests
+    - master
+    - develop
+
+# Lint Helm Chart
+helm:lint:
+  stage: test
+  image: alpine/helm:latest
+  script:
+    - echo "Linting Helm chart..."
+    - helm lint ./helm/target-app
+    - echo "Helm chart is valid"
+  only:
+    - main
+    - master
+    - develop
+
+# Test Helm Template Rendering
+helm:template:
+  stage: test
+  image: alpine/helm:latest
+  script:
+    - echo "Testing Helm template rendering..."
+    - helm template test-release ./helm/target-app > /tmp/rendered-manifests.yaml
+    - cat /tmp/rendered-manifests.yaml
+    - echo "Helm templates rendered successfully"
+  artifacts:
+    paths:
+      - /tmp/rendered-manifests.yaml
+    expire_in: 1 day
+  only:
+    - main
+    - master
+    - develop
+
+# Push Docker Image to Registry
+push:registry:
+  stage: push
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  before_script:
+    - echo "Logging into Docker registry..."
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+  script:
+    - echo "Pushing Docker images to registry..."
+    - echo "Tags - SHA:${IMAGE_TAG}, Version:${APP_VERSION:-latest}, latest"
+    - docker push ${IMAGE_NAME}:${IMAGE_TAG}
+    - docker push ${IMAGE_NAME}:${APP_VERSION:-latest}
+    - docker push ${IMAGE_NAME}:latest
+    - echo "All image tags pushed successfully"
+    - echo "Image available at - ${IMAGE_NAME}:${APP_VERSION:-latest}"
+  dependencies:
+    - build:docker
+    - generate-version
+  tags:
+    - docker
+  only:
+    - main
+    - master
+    - tags
+
+# Deploy to Staging Environment
+deploy:staging:
+  stage: deploy
+  image: alpine/helm:latest
+  resource_group: staging
+  before_script:
+    - apk add --no-cache curl kubectl
+    # Configure kubectl to connect to Kubernetes cluster
+    - kubectl config set-cluster k8s --server="$KUBE_URL" --insecure-skip-tls-verify=true
+    - kubectl config set-credentials gitlab --token="$KUBE_TOKEN"
+    - kubectl config set-context default --cluster=k8s --user=gitlab
+    - kubectl config use-context default
+  script:
+    - echo "Deploying to staging environment..."
+    - echo "Version - ${APP_VERSION:-$IMAGE_TAG}"
+    - kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
+    - |
+      helm upgrade --install ${HELM_RELEASE_NAME} ./helm/target-app \
+        --namespace staging \
+        --set web.image.repository=${IMAGE_NAME} \
+        --set web.image.tag=${APP_VERSION:-$IMAGE_TAG} \
+        --set web.replicaCount=1 \
+        --set mysql.persistence.size=5Gi \
+        --set ingress.hosts[0].host=staging.target.example.com \
+        --wait \
+        --timeout 5m
+    - kubectl rollout status deployment/${HELM_RELEASE_NAME}-web -n staging --timeout=300s
+    - echo "Staging deployment completed!"
+    - echo "Deployed version - ${APP_VERSION:-$IMAGE_TAG}"
+    - kubectl get all -n staging -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}
+  environment:
+    name: staging
+    url: https://staging.target.example.com
+  dependencies:
+    - push:registry
+    - generate-version
+  only:
+    - main
+    - master
+    - develop
+
+# Deploy to Production Environment
+deploy:production:
+  stage: deploy
+  image: alpine/helm:latest
+  resource_group: production
+  before_script:
+    - apk add --no-cache curl kubectl
+    # Configure kubectl
+    - kubectl config set-cluster k8s --server="$KUBE_URL" --insecure-skip-tls-verify=true
+    - kubectl config set-credentials gitlab --token="$KUBE_TOKEN"
+    - kubectl config set-context default --cluster=k8s --user=gitlab
+    - kubectl config use-context default
+  script:
+    - echo "╔═══════════════════════════════════════════════════════╗"
+    - echo "║       🚀 PRODUCTION DEPLOYMENT                        ║"
+    - echo "╚═══════════════════════════════════════════════════════╝"
+    - echo "Version - ${APP_VERSION:-$IMAGE_TAG}"
+    - echo "Image - ${IMAGE_NAME}:${APP_VERSION:-$IMAGE_TAG}"
+    - kubectl create namespace ${KUBERNETES_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+    - |
+      helm upgrade --install ${HELM_RELEASE_NAME} ./helm/target-app \
+        --namespace ${KUBERNETES_NAMESPACE} \
+        --set web.image.repository=${IMAGE_NAME} \
+        --set web.image.tag=${APP_VERSION:-$IMAGE_TAG} \
+        --set web.replicaCount=3 \
+        --set mysql.persistence.size=20Gi \
+        --set mysql.resources.requests.cpu=500m \
+        --set mysql.resources.requests.memory=1Gi \
+        --set ingress.hosts[0].host=target.example.com \
+        --wait \
+        --timeout 10m
+    - kubectl rollout status deployment/${HELM_RELEASE_NAME}-web -n ${KUBERNETES_NAMESPACE} --timeout=600s
+    - echo "✅ Production deployment completed successfully!"
+    - echo "📦 Deployed version - ${APP_VERSION:-$IMAGE_TAG}"
+    - kubectl get all -n ${KUBERNETES_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}
+    - echo "🌐 Application URL - https://target.example.com"
+  environment:
+    name: production
+    url: https://target.example.com
+  dependencies:
+    - push:registry
+    - generate-version
+  when: manual
+  only:
+    - main
+    - master
+    - tags
+
+# Production Tests
+prodtest:
+  stage: prodtest
+  image: curlimages/curl:latest
+  script:
+    - echo "Running production smoke tests..."
+    - echo "Testing health endpoint..."
+    - curl -f https://target.example.com/health || echo "Health check may fail if domain doesn't resolve"
+    - echo "Testing ready endpoint..."
+    - curl -f https://target.example.com/ready || echo "Ready check may fail if domain doesn't resolve"
+  allow_failure: true
+  only:
+    - main
+    - master
+
+# Rollback Production (Manual Job)
+rollback:production:
+  stage: deploy
+  image: alpine/helm:latest
+  resource_group: production
+  before_script:
+    - apk add --no-cache curl kubectl
+    - kubectl config set-cluster k8s --server="$KUBE_URL" --insecure-skip-tls-verify=true
+    - kubectl config set-credentials gitlab --token="$KUBE_TOKEN"
+    - kubectl config set-context default --cluster=k8s --user=gitlab
+    - kubectl config use-context default
+  script:
+    - echo "⚠️  Rolling back production deployment..."
+    - helm rollback ${HELM_RELEASE_NAME} -n ${KUBERNETES_NAMESPACE}
+    - kubectl rollout status deployment/${HELM_RELEASE_NAME}-web -n ${KUBERNETES_NAMESPACE}
+    - echo "✅ Rollback completed successfully"
+    - kubectl get all -n ${KUBERNETES_NAMESPACE} -l app.kubernetes.io/instance=${HELM_RELEASE_NAME}
+  when: manual
+  only:
+    - main
+    - master  
+

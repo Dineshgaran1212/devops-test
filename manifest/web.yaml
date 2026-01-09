@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booli-targets
+  namespace: booli-targets
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: booli-targets
+  template:
+    metadata:
+      labels:
+        app: booli-targets
+    spec:
+      serviceAccountName: booli-targets
+      containers:
+      - name: booli-targets
+        env:
+        - name: MYSQL_HOST
+          values: "db"
+        - name: MYSQL_ROOT_PASSWORD
+          values: rootpassword
+        - name: MYSQL_DATABASE
+          values: "targets"
+        - name: MYSQL_USER
+          value: "targets"
+        - name: MYSQL_PASSWORD
+          value: "passwords"
+        image: mattiashem/python:3.7
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /ready
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          requests:
+            cpu: 10m
+            memory: 4Mi
+          limits:
+            cpu: 10m
+            memory: 4Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: booli-targets
+  namespace: booli-targets
+spec:
+  ports:
+  - port: 8080
+    name: http
+    targetPort: 8080
+  selector:
+    app: webb
+  type: ClusterIP

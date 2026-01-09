@@ -1,0 +1,40 @@
+{{- if .Values.rbac.create -}}
+---
+# Role for the application with minimal required permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "target-app.fullname" . }}
+  labels:
+    {{- include "target-app.labels" . | nindent 4 }}
+rules:
+  # Allow reading ConfigMaps (for configuration)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Allow reading Secrets (for credentials)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  # Allow listing pods (for health checks/monitoring)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+    
+---
+# RoleBinding to associate the Role with the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "target-app.fullname" . }}
+  labels:
+    {{- include "target-app.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "target-app.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "target-app.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
