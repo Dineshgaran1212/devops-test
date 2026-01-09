@@ -1,0 +1,158 @@
+# Default values for target-app
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings
+global:
+  domain: target.example.com
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Network Policies
+networkPolicy:
+  enabled: true
+
+# Web application configuration
+web:
+  replicaCount: 2
+  
+  image:
+    repository: target-web-app
+    pullPolicy: IfNotPresent
+    tag: "1.0.0"
+  
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 80
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 80
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  env:
+    id: "production-1234"
+
+# MySQL database configuration
+mysql:
+  enabled: true
+  
+  image:
+    repository: mysql
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 3306
+  
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+  
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  
+  # ⚠️ SECURITY WARNING: These are DEFAULT VALUES for testing only!
+  # 🔒 PRODUCTION: Override with secure passwords using one of:
+  #    1. Separate secrets file: helm install -f production-secrets.yaml
+  #    2. Command line: --set mysql.auth.rootPassword=xxx
+  #    3. External secrets: Use Vault/AWS Secrets Manager/Azure Key Vault
+  #    4. Manual K8s secret: Create secret before deploying
+  # 
+  # Generate secure passwords with: openssl rand -base64 32
+  auth:
+    rootPassword: ""  # ⚠️ MUST be overridden in production
+    database: "targets"
+    username: "targets"
+    password: ""  # ⚠️ MUST be overridden in production
+    
+    # Optional: Use existing Kubernetes secret instead
+    # existingSecret: "my-existing-secret"
+  
+  initdbScripts:
+    enabled: true
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  hosts:
+    - host: target.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: target-app-tls
+      hosts:
+        - target.example.com
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod Security Context
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Security Context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}

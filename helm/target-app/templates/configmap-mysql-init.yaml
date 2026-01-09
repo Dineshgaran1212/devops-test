@@ -1,0 +1,22 @@
+{{- if .Values.mysql.initdbScripts.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "target-app.fullname" . }}-mysql-initdb
+  labels:
+    {{- include "target-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS `targets` (
+      `id` int NOT NULL AUTO_INCREMENT ,
+      `target` varchar(255) NOT NULL,
+      `tag` varchar(255) NOT NULL,
+      `timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+    INSERT INTO `targets` (`target`, `tag`) VALUES
+    ("https://www.target.se", 'prod,https'),
+    ("https://api.target.se", 'prod,api,https');
+{{- end }}

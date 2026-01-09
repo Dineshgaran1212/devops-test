@@ -1,0 +1,77 @@
+# Secrets and sensitive files
+*-secrets.yaml
+production-secrets.yaml
+staging-secrets.yaml
+dev-secrets.yaml
+*.env
+.env.*
+!.env.example
+
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Kubernetes config
+kubeconfig
+.kube/
+
+# Cloud provider credentials
+.aws/
+.azure/
+gcp-credentials.json
+
+# CI/CD tokens
+.gitlab-ci-local.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker
+.dockerignore
+
+# Helm
+*.tgz
+charts/
+
+# Backup files
+*.bak
+*.backup
